@@ -1,0 +1,10 @@
+Legend: # hardware wall, . empty, : base (eatable), M Murphy, O zonk (falls), I infotron,
+        E exit, S snik snak (enemy), R red disk
+Infotrons left: 3
+
+##########
+#M:::O..E#
+#.:I:O...#
+#..:::...#
+#.I..S.I.#
+##########

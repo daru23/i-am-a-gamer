@@ -1,0 +1,18 @@
+[project]
+name = "ai-plays-supaplex"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "pydantic>=2.7",
+    "pyyaml>=6",
+    "python-dotenv>=1",
+    "httpx>=0.27",
+    "anthropic>=0.40",
+    "openai>=1.40",
+]
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

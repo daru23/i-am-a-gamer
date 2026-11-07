@@ -1,0 +1,478 @@
+diff -ruN a/src/commandLineParser.c b/src/commandLineParser.c
+--- a/src/commandLineParser.c	2026-11-07 17:22:29
++++ b/src/commandLineParser.c	2026-11-07 17:24:16
+@@ -22,6 +22,7 @@
+ #include <stdlib.h>
+ #include <string.h>
+ 
++#include "bridge.h"
+ #include "demo.h"
+ #include "globals.h"
+ #include "logging.h"
+@@ -67,7 +68,7 @@
+     const char *description;
+ } OpenSupaplexCommandLineOption;
+ 
+-#define kNumberOfCommandLineOptions 17
++#define kNumberOfCommandLineOptions 20
+ 
+ static const OpenSupaplexCommandLineOption kFullCommandLineOptions[kNumberOfCommandLineOptions] = {
+     { "help", 'h', 0, "Shows this help" },
+@@ -91,6 +92,9 @@
+     { "play-sp-file", 'p', 1, "Use SP-file to play at start and from menu with F11 and F12" },
+     { "quick-demo", 'q', 1, "Lightning speed SP-demo test, exits the game with message" },
+     { "ultra-quick-demo", 'u', 1, "Ludicrous speed SP-demo test, exits the game with message" },
++    { "bridge-socket", 'b', 1, "AI bridge: serve the JSON-lines control API on this Unix socket path" },
++    { "bridge-seed", 'j', 1, "AI bridge: fixed RNG seed applied on every load_level. Usage: -j n (n=0...65535)" },
++    { "headless", 'y', 0, "AI bridge: no window, no audio, no frame limiting" },
+ };
+ 
+ static struct option options[kNumberOfCommandLineOptions + 1];
+@@ -187,6 +191,15 @@
+                 break;
+             case 'u':
+                 handlePlayDemoFile(FastModeTypeUltra);
++                break;
++            case 'b':
++                bridgeSetSocketPath(optarg);
++                break;
++            case 'j':
++                bridgeSetSeed(atoi(optarg));
++                break;
++            case 'y':
++                bridgeSetHeadless();
+                 break;
+         }
+     }
+diff -ruN a/src/supaplex.c b/src/supaplex.c
+--- a/src/supaplex.c	2026-11-07 17:22:29
++++ b/src/supaplex.c	2026-11-07 17:24:36
+@@ -25,6 +25,7 @@
+ 
+ #include "animations.h"
+ #include "audio.h"
++#include "bridge.h"
+ #include "buttonBorders.h"
+ #include "commandLineParser.h"
+ #include "conditionals.h"
+@@ -659,6 +660,7 @@
+ void drawGamePanelText(void);
+ void scrollToMurphy(void);
+ void runLevel(void);
++uint8_t runLevelIteration(void);
+ void slideDownGameDash(void);
+ void updateScrollOffset(void);
+ uint16_t generateRandomNumber(void);
+@@ -1562,7 +1564,7 @@
+     // isFastMode:              //; CODE XREF: start+2ADj
+     loadMurphySprites(); // 01ED:029D
+     // Conditions to whether show
+-    if (gShouldStartFromSavedSnapshot || gIsForcedLevel || gIsSPDemoAvailableToRun || gFastMode)
++    if (gShouldStartFromSavedSnapshot || gIsForcedLevel || gIsSPDemoAvailableToRun || gFastMode || isBridgeEnabled())
+     {
+         readEverything();
+     }
+@@ -1598,6 +1600,17 @@
+     // Can't think of a better way to handle this right now, but at this point we had a "jmp loc_46FBE" which basically
+     // skipped a few lines of the loop in the first iteration. Will revisit later when I have more knowledge of the code.
+     //
++    if (isBridgeEnabled())
++    {
++        // AI bridge: an external client drives level loading and ticks
++        int bridgeResult = runBridge();
++        destroyAudio();
++        destroyLogging();
++        destroyVideo();
++        destroySystem();
++        return bridgeResult;
++    }
++
+     uint8_t shouldSkipFirstPart = 1;
+ 
+     do
+@@ -4065,186 +4078,197 @@
+     gPlantedRedDiskCountdown = 0;
+     byte_5A323 = 0;
+ 
+-    do
++    while (runLevelIteration() == 0)
+     {
+-        handleGameIterationStarted();
++    }
+ 
+-        int9handler(0);
++    // loc_48E03:              ; CODE XREF: runLevel+328j
++    //                 ; runLevel+333j ...
++    if (gIsRecordingDemo != 0)
++    {
++        stopRecordingDemo();
++    }
+ 
+-        uint16_t mouseButtonsStatus;
++    // loc_48E13:              ; CODE XREF: runLevel+353j
++    uint8_t userDidNotCheat = (gHasUserCheated == 0);
++    gHasUserCheated = 0;
++    if (userDidNotCheat && gShouldUpdateTotalLevelTime != 0 && byte_5A323 == 0)
++    {
++        addCurrentGameTimeToPlayer();
++    }
+ 
+-        // loc_48B23:              ; CODE XREF: runLevel+63j
+-        getMouseStatus(NULL, NULL, &mouseButtonsStatus);
++    // loc_48E30:              ; CODE XREF: runLevel+362j
++    //                 ; runLevel+369j ...
++    gIsMoveScrollModeEnabled = 0;
++    gAdditionalScrollOffsetX = 0;
++    gAdditionalScrollOffsetY = 0;
++    gIsFlashingBackgroundModeEnabled = 0;
++    gDebugExtraRenderDelay = 1;
++    replaceCurrentPaletteColor(0, (Color){0, 0, 0});
++}
+ 
+-        // loc_48B38:              ; CODE XREF: runLevel+6Ej runLevel+75j
+-        if (gIsDebugModeEnabled != 0)
+-        {
+-            if (gToggleFancyEasyTilesThrottleCounter != 0)
+-            {
+-                gToggleFancyEasyTilesThrottleCounter--;
+-            }
++/// One game tick (one iteration of the original runLevel loop).
++/// @return 1 when the level loop should end.
++uint8_t runLevelIteration()
++{
++    handleGameIterationStarted();
+ 
+-            // loc_48B4A:              ; CODE XREF: runLevel+89j
+-            if (gIsEnterPressed == 0 && mouseButtonsStatus == MouseButtonLeft // cmp bx, 1
+-                && gToggleFancyEasyTilesThrottleCounter == 0)
+-            {
+-                gToggleFancyEasyTilesThrottleCounter = 0xA;
+-                restoreOriginalFancyTiles(); // 01ED:1EFF
+-                drawFixedLevel();
+-                convertToEasyTiles();
+-            }
+-        }
++    int9handler(0);
+ 
+-        // loc_48B6B:              ; CODE XREF: runLevel+82j runLevel+94j ...
+-        handleGameUserInput(); // 01ED:1F08
+-        if (gDemoRecordingJustStarted == 1)
+-        {
+-            // Restart the demo
+-            // loc_48ADF:              ; CODE XREF: runLevel+BAj
+-            gDemoRecordingJustStarted = 0;
+-            drawGameTime();
++    uint16_t mouseButtonsStatus;
+ 
+-            do
+-            {
+-                // isFunctionKey:              ; CODE XREF: runLevel+35j
+-                int9handler(1);
+-            } while (areAnyF1ToF10KeysPressed());
++    // loc_48B23:              ; CODE XREF: runLevel+63j
++    getMouseStatus(NULL, NULL, &mouseButtonsStatus);
+ 
+-            // notFunctionKey:             ; CODE XREF: runLevel+31j
+-            initializeGameInfo();
+-            if (isMusicEnabled == 0)
+-            {
+-                stopMusic();
+-            }
+-
+-            // loc_48AFF:              ; CODE XREF: runLevel+3Fj
+-            gIsLevelStartedAsDemo = 0;
+-            gLevelFailed = 1;
+-
+-            // loc_48B09:              ; CODE XREF: runLevel+22j
+-            gPlantedRedDiskCountdown = 0;
+-            byte_5A323 = 0;
+-
+-            continue;
+-
+-            // All the code in this "if" is equivalent to "jmp loc_48ADF"
+-        }
+-
+-        // loc_48B78:              ; CODE XREF: runLevel+B8j
+-        if (gIsFlashingBackgroundModeEnabled != 0)
++    // loc_48B38:              ; CODE XREF: runLevel+6Ej runLevel+75j
++    if (gIsDebugModeEnabled != 0)
++    {
++        if (gToggleFancyEasyTilesThrottleCounter != 0)
+         {
+-            replaceCurrentPaletteColor(0, (Color){0x35, 0x35, 0x35});
++            gToggleFancyEasyTilesThrottleCounter--;
+         }
+ 
+-        // noFlashing:              ; CODE XREF: runLevel+C2j
+-        updateMovingObjects(); // 01ED:1F28
+-        if (gIsFlashingBackgroundModeEnabled != 0)
++        // loc_48B4A:              ; CODE XREF: runLevel+89j
++        if (gIsEnterPressed == 0 && mouseButtonsStatus == MouseButtonLeft // cmp bx, 1
++            && gToggleFancyEasyTilesThrottleCounter == 0)
+         {
+-            replaceCurrentPaletteColor(0, (Color){0x21, 0x21, 0x21});
++            gToggleFancyEasyTilesThrottleCounter = 0xA;
++            restoreOriginalFancyTiles(); // 01ED:1EFF
++            drawFixedLevel();
++            convertToEasyTiles();
+         }
++    }
+ 
+-        // noFlashing2:              ; CODE XREF: runLevel+D8j
++    // loc_48B6B:              ; CODE XREF: runLevel+82j runLevel+94j ...
++    if (isBridgeEnabled() == 0) // The bridge sets gCurrentUserInput itself
++    {
++        handleGameUserInput(); // 01ED:1F08
++    }
++    if (gDemoRecordingJustStarted == 1)
++    {
++        // Restart the demo
++        // loc_48ADF:              ; CODE XREF: runLevel+BAj
++        gDemoRecordingJustStarted = 0;
+         drawGameTime();
+-        clearAdditionalInfoInGamePanelIfNeeded();
+-        if (gIsFlashingBackgroundModeEnabled != 0)
+-        {
+-            replaceCurrentPaletteColor(0, (Color){0x2d, 0x21, 0x0f});
+-        }
+ 
+-        // noFlashing3:              ; CODE XREF: runLevel+F1j
+-        //  01ED:1F5B
+-        updatePlantedRedDisk();
+-        updateExplosionTimers();
+-        updateScrollOffset();
+-
+-        // loc_48D59:              ; CODE XREF: runLevel+19Bj
+-        //                 ; runLevel+1D2j ...
+-        if (gIsFlashingBackgroundModeEnabled != 0)
++        do
+         {
+-            replaceCurrentPaletteColor(0, (Color){0x3f, 0x3f, 0x3f});
+-        }
++            // isFunctionKey:              ; CODE XREF: runLevel+35j
++            int9handler(1);
++        } while (areAnyF1ToF10KeysPressed());
+ 
+-        // noFlashing4:              ; CODE XREF: runLevel+2D1j
+-        drawCurrentLevelViewport(gCurrentPanelHeight); // Added by me
+-        if (gFastMode != FastModeTypeUltra)
++        // notFunctionKey:             ; CODE XREF: runLevel+31j
++        initializeGameInfo();
++        if (isMusicEnabled == 0)
+         {
+-            videoLoop(); // 01ED:2142
++            stopMusic();
+         }
+-        handleGameIterationFinished();
+ 
+-        // isFastMode2:              ; CODE XREF: runLevel+2E8j
+-        if (gDebugExtraRenderDelay > 1)
+-        {
+-            playBaseSound();
+-        }
++        // loc_48AFF:              ; CODE XREF: runLevel+3Fj
++        gIsLevelStartedAsDemo = 0;
++        gLevelFailed = 1;
+ 
+-        // loc_48DB2:              ; CODE XREF: runLevel+2F2j
+-        //  Extra delays in debug mode
+-        for (int i = 1; i < gDebugExtraRenderDelay; ++i)
+-        {
+-            // loc_48DB6:              ; CODE XREF: runLevel+310j
+-            if (gFastMode == FastModeTypeNone)
+-            {
+-                videoLoop(); // 01ED:2160
+-            }
++        // loc_48B09:              ; CODE XREF: runLevel+22j
++        gPlantedRedDiskCountdown = 0;
++        byte_5A323 = 0;
+ 
+-            // isFastMode3:              ; CODE XREF: runLevel+303j
+-            handleGameUserInput();
+-        }
++        return 0;
+ 
+-        // loc_48DCD:              ; CODE XREF: runLevel+2FCj
+-        if (gIsFlashingBackgroundModeEnabled != 0)
+-        {
+-            replaceCurrentPaletteColor(0, (Color){0, 0, 0});
+-        }
++        // All the code in this "if" is equivalent to "jmp loc_48ADF"
++    }
+ 
+-        // noFlashing5:              ; CODE XREF: runLevel+317j
+-        if (gShouldExitGame != 0)
+-        {
+-            break;
+-        }
+-        gFrameCounter++;
+-        if (gShouldExitLevel == 1)
+-        {
+-            break;
+-        }
+-        if (gQuitLevelCountdown == 0) // 01ED:218D
+-        {
+-            continue;
+-        }
++    // loc_48B78:              ; CODE XREF: runLevel+B8j
++    if (gIsFlashingBackgroundModeEnabled != 0)
++    {
++        replaceCurrentPaletteColor(0, (Color){0x35, 0x35, 0x35});
++    }
+ 
+-        // loc_48DFA:              ; CODE XREF: runLevel+33Aj
+-        //  01ED:2197
+-        gQuitLevelCountdown--;
+-        if (gQuitLevelCountdown == 0)
++    // noFlashing:              ; CODE XREF: runLevel+C2j
++    updateMovingObjects(); // 01ED:1F28
++    if (gIsFlashingBackgroundModeEnabled != 0)
++    {
++        replaceCurrentPaletteColor(0, (Color){0x21, 0x21, 0x21});
++    }
++
++    // noFlashing2:              ; CODE XREF: runLevel+D8j
++    drawGameTime();
++    clearAdditionalInfoInGamePanelIfNeeded();
++    if (gIsFlashingBackgroundModeEnabled != 0)
++    {
++        replaceCurrentPaletteColor(0, (Color){0x2d, 0x21, 0x0f});
++    }
++
++    // noFlashing3:              ; CODE XREF: runLevel+F1j
++    //  01ED:1F5B
++    updatePlantedRedDisk();
++    updateExplosionTimers();
++    updateScrollOffset();
++
++    // loc_48D59:              ; CODE XREF: runLevel+19Bj
++    //                 ; runLevel+1D2j ...
++    if (gIsFlashingBackgroundModeEnabled != 0)
++    {
++        replaceCurrentPaletteColor(0, (Color){0x3f, 0x3f, 0x3f});
++    }
++
++    // noFlashing4:              ; CODE XREF: runLevel+2D1j
++    drawCurrentLevelViewport(gCurrentPanelHeight); // Added by me
++    if (gFastMode != FastModeTypeUltra)
++    {
++        videoLoop(); // 01ED:2142
++    }
++    handleGameIterationFinished();
++
++    // isFastMode2:              ; CODE XREF: runLevel+2E8j
++    if (gDebugExtraRenderDelay > 1)
++    {
++        playBaseSound();
++    }
++
++    // loc_48DB2:              ; CODE XREF: runLevel+2F2j
++    //  Extra delays in debug mode
++    for (int i = 1; i < gDebugExtraRenderDelay; ++i)
++    {
++        // loc_48DB6:              ; CODE XREF: runLevel+310j
++        if (gFastMode == FastModeTypeNone)
+         {
+-            break;
++            videoLoop(); // 01ED:2160
+         }
+-    } while (1);
+ 
+-    // loc_48E03:              ; CODE XREF: runLevel+328j
+-    //                 ; runLevel+333j ...
+-    if (gIsRecordingDemo != 0)
++        // isFastMode3:              ; CODE XREF: runLevel+303j
++        handleGameUserInput();
++    }
++
++    // loc_48DCD:              ; CODE XREF: runLevel+2FCj
++    if (gIsFlashingBackgroundModeEnabled != 0)
+     {
+-        stopRecordingDemo();
++        replaceCurrentPaletteColor(0, (Color){0, 0, 0});
+     }
+ 
+-    // loc_48E13:              ; CODE XREF: runLevel+353j
+-    uint8_t userDidNotCheat = (gHasUserCheated == 0);
+-    gHasUserCheated = 0;
+-    if (userDidNotCheat && gShouldUpdateTotalLevelTime != 0 && byte_5A323 == 0)
++    // noFlashing5:              ; CODE XREF: runLevel+317j
++    if (gShouldExitGame != 0)
+     {
+-        addCurrentGameTimeToPlayer();
++        return 1;
+     }
++    gFrameCounter++;
++    if (gShouldExitLevel == 1)
++    {
++        return 1;
++    }
++    if (gQuitLevelCountdown == 0) // 01ED:218D
++    {
++        return 0;
++    }
+ 
+-    // loc_48E30:              ; CODE XREF: runLevel+362j
+-    //                 ; runLevel+369j ...
+-    gIsMoveScrollModeEnabled = 0;
+-    gAdditionalScrollOffsetX = 0;
+-    gAdditionalScrollOffsetY = 0;
+-    gIsFlashingBackgroundModeEnabled = 0;
+-    gDebugExtraRenderDelay = 1;
+-    replaceCurrentPaletteColor(0, (Color){0, 0, 0});
++    // loc_48DFA:              ; CODE XREF: runLevel+33Aj
++    //  01ED:2197
++    gQuitLevelCountdown--;
++    if (gQuitLevelCountdown == 0)
++    {
++        return 1;
++    }
++
++    return 0;
+ }
+ 
+ void updateUserInputInScrollMovementMode() // sub_4914A   proc near       ; CODE XREF: handleGameUserInput+7p
+@@ -14368,4 +14392,43 @@
+         }
+         // loc_50301:             // ; CODE XREF: drawSpeedFixCredits+1Ej
+     } while (isAnyKeyPressed() == 0 && isAnyGameControllerButtonPressed() == 0);
++}
++
++// AI bridge hooks: the small surface bridge.c needs from this file.
++
++void bridgeLoadLevel(uint8_t levelNumber, uint16_t seed)
++{
++    gIsPlayingDemo = 0;
++    gIsSPDemoAvailableToRun = 0;
++    gSelectedOriginalDemoLevelNumber = 0;
++    gSelectedOriginalDemoFromCommandLineLevelNumber = 0;
++    gHasUserCheated = 1; // No player stats or hall of fame writes
++    gShouldUpdateTotalLevelTime = 0;
++    gCurrentSelectedLevelIndex = levelNumber;
++    byte_5A19B = 0;
++
++    fetchAndInitializeLevel();
++
++    // Same per-run setup as the top of runLevel()
++    gIsLevelStartedAsDemo = 0;
++    gLevelFailed = 1;
++    gPlantedRedDiskCountdown = 0;
++    byte_5A323 = 0;
++    gCurrentUserInput = UserInputNone;
++    gRandomGeneratorSeed = seed;
++}
++
++void bridgeSetUserInput(uint8_t input)
++{
++    gCurrentUserInput = (input <= UserInputSpaceOnly ? input : UserInputNone);
++}
++
++uint16_t bridgeGetRandomGeneratorSeed()
++{
++    return gRandomGeneratorSeed;
++}
++
++uint8_t bridgeIsLevelCompleted()
++{
++    return byte_5A19B;
+ }

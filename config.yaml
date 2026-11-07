@@ -1,0 +1,28 @@
+# Which model plays. Switch providers here only — never in code.
+provider:
+  name: ollama            # ollama | claude | openai_compat
+  model: qwen2.5:14b-instruct
+  base_url: http://localhost:11434
+  timeout_s: 20
+
+fallback:                  # used when the primary times out or fails twice
+  name: claude
+  model: claude-haiku-4-5
+  timeout_s: 15
+
+agent:
+  max_attempts_per_level: 5
+  ticks_per_move: 8
+  window_radius: 6        # local view around Murphy, in tiles
+
+engine:
+  binary: build/engine/opensupaplex   # built by scripts/build_engine.sh
+  socket: /tmp/supaplex.sock          # Unix socket paths max out at 104 bytes on macOS
+  seed: 1234                          # RNG seed applied on every load_level
+  headless: true
+
+replay:
+  buffer_minutes: 10
+
+logging:
+  dir: logs/
