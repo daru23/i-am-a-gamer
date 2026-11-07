@@ -26,6 +26,7 @@
 #include <unistd.h>
 
 #include "globals.h"
+#include "graphics.h"
 #include "system.h"
 
 #define kBridgeLineBufferSize 65536
@@ -215,6 +216,15 @@ static void handleLoadLevel(int fd, const char *line)
     readInt(line, "seed", &seed);
 
     bridgeLoadLevel((uint8_t)level, (uint16_t)seed);
+    if (sIsHeadless == 0)
+    {
+        // The menu loop we replace is what fades in the game palette
+        // (supaplex.c, main), so without this the window stays black.
+        // Display only: game state and RNG are untouched.
+        setPalette(gGamePalette);
+        drawCurrentLevelViewport(gCurrentPanelHeight);
+        videoLoop();
+    }
     sIsLevelLoaded = 1;
     sLevelNumber = (uint8_t)level;
     sIsLevelOver = 0;

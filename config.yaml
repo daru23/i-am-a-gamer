@@ -30,7 +30,7 @@ engine:
   binary: build/engine/opensupaplex   # built by scripts/build_engine.sh
   socket: /tmp/supaplex.sock          # Unix socket paths max out at 104 bytes on macOS
   seed: 1234                          # RNG seed applied on every load_level
-  headless: true
+  headless: false
 
 replay:
   buffer_minutes: 10

@@ -178,6 +178,21 @@ def test_shadow_stays_in_sync(engines):
     assert shadow.get_state() == main.get_state()
 
 
+@needs_engine
+def test_recorded_solution_wins_level_1(engines):
+    """Replays the inputs of a real model run that solved level 1. Guards
+    determinism all the way to `won`, and the executor's win handling."""
+    fixture = json.loads((Path(__file__).parent / "fixtures" / "level1_solution.json").read_text())
+    main, shadow = engines
+    ex = Executor(main, shadow, level=fixture["level"], seed=fixture["seed"],
+                  ticks_per_move=fixture["ticks_per_move"])
+    ex.start()
+    result = ex.run(fixture["moves"])
+    assert result.outcome == "level_complete"
+    assert result.status.won and result.status.tick == fixture["won_at_tick"]
+    assert result.executed == fixture["moves"]
+
+
 # --- loop ----------------------------------------------------------------
 
 class ScriptedProvider:

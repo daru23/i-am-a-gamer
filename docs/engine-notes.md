@@ -197,6 +197,9 @@ What the hooks change:
 - `runLevelIteration()` is one tick. `runLevel` loops over it, so normal play is unchanged.
 - In bridge mode the tick skips `handleGameUserInput()`, so keys and cheats can't
   affect a run. The bridge sets `gCurrentUserInput` before every tick.
+- With a window, `load_level` also sets the game palette and draws one frame
+  (`handleLoadLevel` in `bridge.c`). The menu loop that bridge mode replaces is what
+  normally fades the palette in (`supaplex.c:1622`); without it the window stays black.
 - `bridgeLoadLevel()` runs `fetchAndInitializeLevel()` plus the per-run setup from the
   top of `runLevel`. It marks the run as "cheated" so no player or hall-of-fame files
   are written, then sets `gRandomGeneratorSeed`.
@@ -219,9 +222,9 @@ Determinism tests: `tests/test_determinism.py`. They cover:
 - two processes with the same seed and inputs, on levels with and without deaths and RNG use
 - reloading a level in the same process
 - seed handling and error replies
+- reaching `won`: `tests/test_agent.py` replays a recorded model solution of level 1
+  (`tests/fixtures/level1_solution.json`) and checks it wins at the same tick
 
 Not covered yet:
-- No test reaches `won`, because random moves don't solve levels. Add one from a
-  recorded solution in Phase 3.
 - Windowed and headless runs matched on one level 6 run, checked by hand. That
   check isn't automated yet (Phase 4).
