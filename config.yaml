@@ -4,6 +4,14 @@ provider:
   model: qwen2.5:14b-instruct
   base_url: http://localhost:11434
   timeout_s: 20
+  # Optional: temperature (ollama, openai_compat), keep_alive (ollama), max_tokens (claude).
+  # OpenAI-compatible example (OpenAI, OpenRouter, Groq, vLLM, LM Studio, Ollama's /v1):
+  #   name: openai_compat
+  #   model: gpt-4o-mini
+  #   base_url: https://api.openai.com/v1
+  #   api_key_env: OPENAI_API_KEY       # name of the .env variable holding the key
+  #   response_format: json_schema      # or json_object if the endpoint lacks schemas
+  # Try the current choice on the sample grid: uv run python -m agent.providers
 
 fallback:                  # used when the primary times out or fails twice
   name: claude
