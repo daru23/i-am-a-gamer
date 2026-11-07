@@ -20,8 +20,11 @@ fallback:                  # used when the primary times out or fails twice
 
 agent:
   max_attempts_per_level: 5
-  ticks_per_move: 8
+  max_decisions_per_attempt: 200  # model calls before an attempt counts as failed
+  ticks_per_move: 8       # one tile step takes 8 engine ticks
   window_radius: 6        # local view around Murphy, in tiles
+  lookahead: true         # shadow engine refuses moves that would kill Murphy
+  lookahead_moves: 3      # wait moves simulated after a plan to catch late deaths
 
 engine:
   binary: build/engine/opensupaplex   # built by scripts/build_engine.sh
